@@ -33,6 +33,7 @@ class FTPServer(threading.Thread):
         self.data_sock = None
         self.data_address = None
         self.server_sock = None
+        self.cwd = '.'
 
     def run(self):
         self.do_protocol()
@@ -131,6 +132,16 @@ class FTPServer(threading.Thread):
     def CWD(self, path):
         log("CWD", path)
 
+        pathname = path.endswith(os.path.sep) and path or os.path.join(self.cwd, path)
+        log('CWD', "Pathname: " + pathname)
+
+        if not os.path.exists(pathname) or not os.path.isdir(pathname):
+            self.send_command('550 Directory not exists.\r\n')
+            return
+
+        self.cwd = pathname
+        self.send_command('250 Changed working directory.\r\n')
+
     # QUIT command
     def QUIT(self, arg):
         log("QUIT", arg)
@@ -188,9 +199,9 @@ class FTPServer(threading.Thread):
             return
 
         if not path:
-            pathname = os.path.abspath('.')
+            pathname = os.path.abspath(self.cwd)
         else:
-            pathname = os.path.abspath(os.path.join(os.getenv('HOME'), path))
+            pathname = os.path.abspath(os.path.join(self.cwd, path))
 
         log("LIST", "Pathname: " + pathname)
 
@@ -222,7 +233,7 @@ class FTPServer(threading.Thread):
         help_str = """
                 USER [username]                 Send new user information
                 PASS [password]                 Password for authentication
-                CWD  [dirpath]                  Change working directory.
+                CWD  [dir_path]                 Change working directory.
                 QUIT []                         Terminate ftp session and exit
                 PASV []                         The directive requires server-DTP in a data port.
                 EPSV []
