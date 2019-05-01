@@ -185,6 +185,7 @@ class FTPServer(threading.Thread):
     # PWD command
     def PWD(self, path):
         log("PWD", path)
+        self.send_command(os.path.abspath(self.cwd) + '\r\n')
 
     # SYST command
     def SYST(self, path):
