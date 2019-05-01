@@ -11,6 +11,7 @@
 import socket
 import threading
 import time
+import os
 
 
 def log(func, cmd):
@@ -26,6 +27,12 @@ class FTPServer(threading.Thread):
         self.user_name = ''
         self.password = ''
         self.isAuthenticated = False
+        self.pasv_mode = False
+        self.data_sock_addr = None
+        self.data_sock_port = None
+        self.data_sock = None
+        self.data_address = None
+        self.server_sock = None
 
     def run(self):
         self.do_protocol()
@@ -59,9 +66,35 @@ class FTPServer(threading.Thread):
                                   'command line too long.\r\n')
                 log('Receive', err)
 
-    # send data to client socket
+    # send text to client socket
     def send_command(self, cmd):
         self.client_socket.send(cmd.encode('utf-8'))
+
+    # send data to client socket
+    def send_data(self, data):
+        self.data_sock.send(data.encode('utf-8'))
+
+    def start_data_sock(self):
+        log('start_data_sock', 'Opening a data channel')
+        try:
+            self.data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            if self.pasv_mode:
+                self.data_sock, self.data_address = self.server_sock.accept()
+
+            else:
+                self.data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.data_sock.connect((self.data_sock_addr, self.data_sock_port))
+        except socket.error as err:
+            log('start_data_sock', err)
+
+    def stop_data_sock(self):
+        log('stop_data_sock', 'Closing a data channel')
+        try:
+            self.data_sock.close()
+            if self.pasv_mode:
+                self.server_sock.close()
+        except socket.error as err:
+            log('stop_data_sock', err)
 
     # USER command
     def USER(self, user):
@@ -106,6 +139,103 @@ class FTPServer(threading.Thread):
     # PASV command
     def PASV(self, path):
         log("PASV", path)
+
+    # EPSV command
+    def EPSV(self, path):
+        log("EPSV", path)
+
+    # PORT command
+    def PORT(self, cmd):
+        log("PORT", cmd)
+
+        if self.pasv_mode:
+            self.server_sock.close()
+            self.pasv_mode = False
+
+        port_list = cmd.split(',')
+        self.data_sock_addr = '.'.join(port_list[:4])
+        self.data_sock_port = (int(port_list[4]) << 8) + int(port_list[5])
+        log('PORT', 'Address: ' + self.data_sock_addr + ", Port: " + str(self.data_sock_port))
+
+        self.send_command('200 Parsed address and port.\r\n')
+
+    # EPRT command
+    def EPRT(self, path):
+        log("EPRT", path)
+
+    # RETR command
+    def RETR(self, path):
+        log("RETR", path)
+
+    # STOR command
+    def STOR(self, path):
+        log("STOR", path)
+
+    # PWD command
+    def PWD(self, path):
+        log("PWD", path)
+
+    # SYST command
+    def SYST(self, path):
+        log("SYST", path)
+
+    # LIST command
+    def LIST(self, path):
+        log("LIST", path)
+
+        if not self.isAuthenticated:
+            self.send_command('530 User not logged in.\r\n')
+            return
+
+        if not path:
+            pathname = os.path.abspath('.')
+        else:
+            pathname = os.path.abspath(os.path.join(os.getenv('HOME'), path))
+
+        log("LIST", "Pathname: " + pathname)
+
+        if not os.path.exists(pathname):
+            self.send_command('550 Path name not found.\r\n')
+        else:
+            self.send_command('150 Here is listing.===================\r\n')
+
+            # open socket to send data
+            self.start_data_sock()
+            if not os.path.isdir(pathname):
+                file_message = pathname
+                self.data_sock.sock(file_message + '\r\n')
+
+            else:
+                for file in os.listdir(pathname):
+                    file_message = file
+                    self.send_data(file_message + '\r\n')
+
+            # close socket after sending data
+            self.stop_data_sock()
+            log("LIST", "sent list")
+            self.send_command('==============226 List done.\r\n')
+
+    # HELP command
+    def HELP(self, arg):
+        log("HELP", arg)
+
+        help_str = """
+                USER [username]                 Send new user information
+                PASS [password]                 Password for authentication
+                CWD  [dirpath]                  Change working directory.
+                QUIT []                         Terminate ftp session and exit
+                PASV []                         The directive requires server-DTP in a data port.
+                EPSV []
+                PORT [h1, h2, h3, h4, p1, p2]   Data connection data port
+                EPRT []
+                RETR []                         This command allows server-FTP send a copy of a file with the specified path name to the data connection The other end.
+                STOR []                         This command allows server-DTP to receive data transmitted via a data connection, and data is stored as A file server site.
+                PWD  []                         Get current working directory.
+                SYS  []                         This command is used to find the server's operating system type.
+                LIST [dir_path or filename]     List file and directory names
+                HELP                            Displays help information.\r\n
+                """
+        self.send_command(help_str)
 
 
 def main():
