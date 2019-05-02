@@ -12,11 +12,15 @@ import socket
 import threading
 import time
 import os
+import sys
 
 
 def log(func, cmd):
     log_msg = time.strftime("%Y-%m-%d %H-%M-%S [-] " + func)
     print("\033[31m%s\033[0m: \033[32m%s\033[0m" % (log_msg, cmd))
+
+
+HOST = socket.gethostbyname(socket.gethostname())
 
 
 class FTPServer(threading.Thread):
@@ -148,12 +152,29 @@ class FTPServer(threading.Thread):
         self.send_command('221 Disconnecting... Goodbye!\r\n')
 
     # PASV command
-    def PASV(self, path):
-        log("PASV", path)
+    def PASV(self, arg):
+        log("PASV", arg)
+        self.pasv_mode = True
+        self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_sock.bind((socket.gethostname(), 0))
+        self.server_sock.listen(5)
+        addr, port = self.server_sock.getsockname()
+        log("PASV", "Address: " + addr + ", Port: " + str(port))
+        self.send_command('200 Entering Passive Mode (%s,%u,%u).\r\n' % (','.join(addr.split('.')), port >> 8 & 0xFF, port & 0xFF))
 
     # EPSV command
-    def EPSV(self, path):
-        log("EPSV", path)
+    def EPSV(self, arg):
+        log("EPSV", arg)
+        self.pasv_mode = True
+        self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_sock.bind((socket.gethostname(), 0))
+        self.server_sock.listen(5)
+        addr, port = self.server_sock.getsockname()
+        log("PASV", "Address: " + addr + ", Port: " + str(port))
+        self.send_command(
+            '200 Entering Passive Mode (%s,%u,%u).\r\n' % HOST, port >> 8 & 0xFF, port & 0xFF)
 
     # PORT command
     def PORT(self, cmd):
@@ -175,12 +196,62 @@ class FTPServer(threading.Thread):
         log("EPRT", path)
 
     # RETR command
-    def RETR(self, path):
-        log("RETR", path)
+    def RETR(self, filename):
+        log("RETR", filename)
+        if not self.isAuthenticated:
+            self.send_command('530 User not logged in.\r\n')
+            return
+
+        pathname = os.path.join(self.cwd, filename)
+        log('RETR', "Pathname: " + pathname)
+
+        if not os.path.exists(pathname):
+            return
+
+        try:
+            file = open(pathname, 'r')
+        except OSError as err:
+            log('RETR', err)
+            self.send_command(str(err) + '\r\n')
+            return
+
+        self.send_command('150 Opening data connection...\r\n')
+        self.start_data_sock()
+        while True:
+            data = file.read(1024)
+            if not data:
+                break
+            self.send_data(data)
+        file.close()
+        self.stop_data_sock()
+        self.send_command('226 Transfer complete.\r\n')
 
     # STOR command
-    def STOR(self, path):
-        log("STOR", path)
+    def STOR(self, file):
+        log("STOR", file)
+        if not self.isAuthenticated:
+            self.send_command('530 User not logged in.\r\n')
+            return
+
+        pathname = os.path.join(self.cwd, file)
+        log('STOR', "Pathname: " + pathname)
+        try:
+            file = open(pathname, 'w')
+        except OSError as err:
+            log('STOR', err)
+            self.send_command(str(err) + '\r\n')
+            return
+
+        self.send_command('150 Opening data connection...\r\n')
+        self.start_data_sock()
+        while True:
+            data = self.data_sock.recv(1024)
+            if not data:
+                break
+            file.write(data)
+        file.close()
+        self.stop_data_sock()
+        self.send_command('226 Transfer completed.\r\n')
 
     # PWD command
     def PWD(self, path):
@@ -190,6 +261,7 @@ class FTPServer(threading.Thread):
     # SYST command
     def SYST(self, path):
         log("SYST", path)
+        self.send_command(sys.platform + '\r\n')
 
     # LIST command
     def LIST(self, path):
@@ -237,13 +309,13 @@ class FTPServer(threading.Thread):
                 CWD  [dir_path]                 Change working directory.
                 QUIT []                         Terminate ftp session and exit
                 PASV []                         The directive requires server-DTP in a data port.
-                EPSV []
+                EPSV []                         Enter extended passive mode
                 PORT [h1, h2, h3, h4, p1, p2]   Data connection data port
-                EPRT []
-                RETR []                         This command allows server-FTP send a copy of a file with the specified path name to the data connection The other end.
-                STOR []                         This command allows server-DTP to receive data transmitted via a data connection, and data is stored as A file server site.
+                EPRT []                         Extended data port
+                RETR []                         Server sends a copy of a file with the specified path name
+                STOR []                         Data is stored as a file server site.
                 PWD  []                         Get current working directory.
-                SYS  []                         This command is used to find the server's operating system type.
+                SYS  []                         Get server's operating system
                 LIST [dir_path or filename]     List file and directory names
                 HELP                            Displays help information.\r\n
                 """
